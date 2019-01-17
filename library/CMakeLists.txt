@@ -31,7 +31,7 @@ set(src_crypto
     entropy_poll.c
     error.c
     gcm.c
-    havege.c
+    # havege.c
     hkdf.c
     hmac_drbg.c
     md.c
@@ -60,7 +60,7 @@ set(src_crypto
     sha256.c
     sha512.c
     threading.c
-    timing.c
+    # timing.c
     version.c
     version_features.c
     xtea.c

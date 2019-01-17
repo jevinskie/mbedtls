@@ -399,7 +399,7 @@ static uint32_t RCON[10];
 #define XTIME(x) ( ( x << 1 ) ^ ( ( x & 0x80 ) ? 0x1B : 0x00 ) )
 #define MUL(x,y) ( ( x && y ) ? pow[(log[x]+log[y]) % 255] : 0 )
 
-static int aes_init_done = 0;
+int aes_init_done = 0;
 
 static void aes_gen_tables( void )
 {
@@ -514,6 +514,12 @@ static void aes_gen_tables( void )
 #define AES_FT3(idx) FT3[idx]
 
 #endif /* MBEDTLS_AES_FEWER_TABLES */
+
+__attribute__((noinline))
+void aes_round_marker(void) {
+    asm volatile("nop\n\t");
+    return;
+}
 
 void mbedtls_aes_init( mbedtls_aes_context *ctx )
 {
@@ -861,6 +867,51 @@ int mbedtls_aes_xts_setkey_dec( mbedtls_aes_xts_context *ctx,
                  AES_RT3( ( Y0 >> 24 ) & 0xFF );    \
 }
 
+void aes_rround(uint32_t *x0p, uint32_t *x1p, uint32_t *x2p, uint32_t *x3p,
+                // uint32_t *y0p, uint32_t *y1p, uint32_t *y2p, uint32_t *y3p,
+                uint32_t Y0, uint32_t Y1, uint32_t Y2, uint32_t Y3,
+                uint32_t **rkp);
+
+__attribute__((noinline))
+void aes_rround(uint32_t *x0p, uint32_t *x1p, uint32_t *x2p, uint32_t *x3p,
+                // uint32_t *y0p, uint32_t *y1p, uint32_t *y2p, uint32_t *y3p,
+                uint32_t Y0, uint32_t Y1, uint32_t Y2, uint32_t Y3,
+                uint32_t **rkp) {
+    // uint32_t X0, X1, X2, X3;
+    // uint32_t Y0, Y1, Y2, Y3;
+    uint32_t *RK = *rkp;
+    // X0 = *x0p;
+    // X1 = *x1p;
+    // X2 = *x2p;
+    // X3 = *x3p;
+    // Y0 = *y0p;
+    // Y1 = *y1p;
+    // Y2 = *y2p;
+    // Y3 = *y3p;
+    /* X0 = *RK++ ^ AES_RT0( ( Y0       ) & 0xFF ) ^   \ */
+    *x0p = *RK++ ^ AES_RT0( ( Y0       ) & 0xFF ) ^   \
+                 AES_RT1( ( Y3 >>  8 ) & 0xFF ) ^   \
+                 AES_RT2( ( Y2 >> 16 ) & 0xFF ) ^   \
+                 AES_RT3( ( Y1 >> 24 ) & 0xFF );
+
+    /* X1 = *RK++ ^ AES_RT0( ( Y1       ) & 0xFF ) ^   \ */
+    *x1p = *RK++ ^ AES_RT0( ( Y1       ) & 0xFF ) ^   \
+                 AES_RT1( ( Y0 >>  8 ) & 0xFF ) ^   \
+                 AES_RT2( ( Y3 >> 16 ) & 0xFF ) ^   \
+                 AES_RT3( ( Y2 >> 24 ) & 0xFF );
+    /* X2 = *RK++ ^ AES_RT0( ( Y2       ) & 0xFF ) ^   \ */
+    *x2p = *RK++ ^ AES_RT0( ( Y2       ) & 0xFF ) ^   \
+                 AES_RT1( ( Y1 >>  8 ) & 0xFF ) ^   \
+                 AES_RT2( ( Y0 >> 16 ) & 0xFF ) ^   \
+                 AES_RT3( ( Y3 >> 24 ) & 0xFF );
+    /* X3 = *RK++ ^ AES_RT0( ( Y3       ) & 0xFF ) ^   \ */
+    *x3p = *RK++ ^ AES_RT0( ( Y3       ) & 0xFF ) ^   \
+                 AES_RT1( ( Y2 >>  8 ) & 0xFF ) ^   \
+                 AES_RT2( ( Y1 >> 16 ) & 0xFF ) ^   \
+                 AES_RT3( ( Y0 >> 24 ) & 0xFF );
+    *rkp = RK;
+}
+
 /*
  * AES-ECB block encryption
  */
@@ -949,11 +1000,23 @@ int mbedtls_internal_aes_decrypt( mbedtls_aes_context *ctx,
 
     for( i = ( ctx->nr >> 1 ) - 1; i > 0; i-- )
     {
-        AES_RROUND( Y0, Y1, Y2, Y3, X0, X1, X2, X3 );
-        AES_RROUND( X0, X1, X2, X3, Y0, Y1, Y2, Y3 );
+        aes_round_marker();
+
+        aes_rround(&Y0, &Y1, &Y2, &Y3, X0, X1, X2, X3, &RK);
+        // AES_RROUND( Y0, Y1, Y2, Y3, X0, X1, X2, X3 );
+
+        aes_round_marker();
+
+        aes_rround(&X0, &X1, &X2, &X3, Y0, Y1, Y2, Y3, &RK);
+        // AES_RROUND( X0, X1, X2, X3, Y0, Y1, Y2, Y3 );
     }
 
-    AES_RROUND( Y0, Y1, Y2, Y3, X0, X1, X2, X3 );
+    aes_round_marker();
+
+    aes_rround(&Y0, &Y1, &Y2, &Y3, X0, X1, X2, X3, &RK);
+    // AES_RROUND( Y0, Y1, Y2, Y3, X0, X1, X2, X3 );
+
+    aes_round_marker();
 
     X0 = *RK++ ^ \
             ( (uint32_t) RSb[ ( Y0       ) & 0xFF ]       ) ^
@@ -978,6 +1041,8 @@ int mbedtls_internal_aes_decrypt( mbedtls_aes_context *ctx,
             ( (uint32_t) RSb[ ( Y2 >>  8 ) & 0xFF ] <<  8 ) ^
             ( (uint32_t) RSb[ ( Y1 >> 16 ) & 0xFF ] << 16 ) ^
             ( (uint32_t) RSb[ ( Y0 >> 24 ) & 0xFF ] << 24 );
+
+    aes_round_marker();
 
     PUT_UINT32_LE( X0, output,  0 );
     PUT_UINT32_LE( X1, output,  4 );

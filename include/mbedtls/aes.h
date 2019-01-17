@@ -115,6 +115,8 @@ typedef struct mbedtls_aes_xts_context
 #include "aes_alt.h"
 #endif /* MBEDTLS_AES_ALT */
 
+void aes_round_marker(void);
+
 /**
  * \brief          This function initializes the specified AES context.
  *
